@@ -14,8 +14,11 @@
   </properties>
 
   <build>
+    <!-- Indicar carpeta de fuentes personalizada -->
+    <sourceDirectory>piomatter-local/src/main/java</sourceDirectory>
+
     <plugins>
-      <!-- Compilar amb Java 17 -->
+      <!-- Compilar con Java 17 -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
@@ -25,15 +28,18 @@
         </configuration>
       </plugin>
 
-      <!-- Executar qualsevol classe Main -->
+      <!-- Ejecutar cualquier clase Main -->
       <plugin>
-        <groupId>org.codehaus.mojo</groupId>
-        <artifactId>exec-maven-plugin</artifactId>
-        <version>3.6.2</version>
-        <configuration>
-          <cleanupDaemonThreads>false</cleanupDaemonThreads>
-        </configuration>
+          <groupId>org.codehaus.mojo</groupId>
+          <artifactId>exec-maven-plugin</artifactId>
+          <version>3.6.2</version>
+          <configuration>
+              <cleanupDaemonThreads>false</cleanupDaemonThreads>
+              <mainClass>${exec.mainClass}</mainClass>
+              <classpathScope>compile</classpathScope>
+          </configuration>
       </plugin>
+
 
       <!-- Empaquetar en un JAR executable (server) -->
       <plugin>

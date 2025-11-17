@@ -1,4 +1,4 @@
-package com.Pong;
+package com.demos;
 
 import com.piomatter.PioMatter;
 import com.piomatter.UtilsFPS;
@@ -44,6 +44,17 @@ public class Main {
     public Main(String serverUri) {
         ws = UtilsWS.getSharedInstance(serverUri);
         ws.onMessage(this::onWsMessage);
+        ws.onOpen(message -> {
+            System.out.println("Conexión abierta: " + message);
+
+            JSONObject jo = new JSONObject();
+            jo.put("type", "check_name");
+            jo.put("value", "raspberryClient");
+            ws.safeSend(jo.toString());
+        });
+
+
+
     }
 
     private void onWsMessage(String msg) {
@@ -229,7 +240,7 @@ public class Main {
         try {
             String content = new String(Files.readAllBytes(Paths.get("/home/pi/Adafruit_Pi5_Piomatter/piomatter-java-jni/config.json")));
             JSONObject json = new JSONObject(content);
-            return json.optString("serverUri", "ws://localhost:3000");
+            return json.optString("serverUri", "wss://matrixplay2.ieti.site:443");
         } catch (Exception e) {
             e.printStackTrace();
             return "ws://localhost:3000"; // fallback
