@@ -43,19 +43,23 @@ public class Main {
 
     public Main(String serverUri) {
         ws = UtilsWS.getSharedInstance(serverUri);
+
+        // Mostrar la URL en pantalla
+        this.text = "Server: " + serverUri;
+        this.mode = Mode.TEXT;
+        this.expireAtMs = System.currentTimeMillis() + 60_000;
+
         ws.onMessage(this::onWsMessage);
         ws.onOpen(message -> {
             System.out.println("Conexión abierta: " + message);
 
             JSONObject jo = new JSONObject();
-            jo.put("type", "check_name");
+            jo.put("type", "checkMyName");
             jo.put("value", "raspberryClient");
             ws.safeSend(jo.toString());
         });
-
-
-
     }
+
 
     private void onWsMessage(String msg) {
         try {
@@ -122,7 +126,7 @@ public class Main {
 
             while (true) {
                 fps.beginFrame();
-
+                
                 g.setColor(Color.BLACK);
                 g.fillRect(0, 0, WIDTH, HEIGHT);
 
