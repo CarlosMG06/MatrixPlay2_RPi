@@ -119,8 +119,8 @@ public class GameObject {
                 .put("id", "ball")
                 .put("x", serverData.optInt("ballX", 32))
                 .put("y", serverData.optInt("ballY", 32))
-                .put("ancho", 2)
-                .put("alto", 2)
+                .put("ancho", 3)
+                .put("alto", 4)
                 .put("color", "white"),
                 pantallaAncho, pantallaAlto, reservedTop, 64, 64);
 
