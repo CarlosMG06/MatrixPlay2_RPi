@@ -278,7 +278,7 @@ public class Main {
                     UtilsImage.drawImageFit(g, qrImage, 0, 0, WIDTH, HEIGHT, FitMode.CONTAIN);
                     PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
                     pm.swap();
-                    Thread.sleep(5000);
+                    Thread.sleep(10000);
                 } else {
                     System.out.println("[QR] No se pudo cargar frame.png");
                 }
