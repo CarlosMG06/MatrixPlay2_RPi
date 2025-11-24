@@ -51,7 +51,7 @@ public class Main {
 
     // Estado del juego
     private volatile boolean jocActiu = false;
-    private volatile boolean countdownActive = false; // CHANGED: nuevo flag para controlar countdown
+    private volatile boolean countdownActive = false;
     private volatile int j1Punts = 0;
     private volatile int j2Punts = 0;
     private volatile List<GameObject> gameObjects = new ArrayList<>();
@@ -77,13 +77,11 @@ public class Main {
     /** Se ejecuta cuando el WebSocket se abre */
     private void onWsOpen(String msg) {
         try {
-            // Identificación inicial
             JSONObject jo = new JSONObject();
             jo.put("type", "checkMyName");
             jo.put("value", "raspberryClient");
             ws.safeSend(jo.toString());
 
-            // Solicitud de configuración inicial si no está ya configurado
             if (!alreadyConfigured) {
                 JSONObject jsonObject = new JSONObject();
                 jsonObject.put("type", "raspberry");
@@ -100,13 +98,11 @@ public class Main {
     /** Procesa los mensajes recibidos del servidor */
     private void onWsMessage(String msg) {
         try {
-            // Log del raw message para depuración
             System.out.println("[client] RAW WS MSG: " + msg);
 
             JSONObject o = new JSONObject(msg);
             String t = o.optString("type", "");
 
-            // Actualizamos expireAtMs solo si no es estado de juego
             if (!t.equals("jocData")) {
                 long ttl = Math.max(1, o.optLong("ttl_ms", 5000L));
                 expireAtMs = System.currentTimeMillis() + ttl;
@@ -121,7 +117,6 @@ public class Main {
                 }
 
                 case "config" -> {
-                    // Procesar configuración enviada por el servidor
                     String groupName = o.optString("groupName", "groupName desconocido");
                     String url = o.optString("url", "url desconocida");
 
@@ -133,10 +128,9 @@ public class Main {
                     expireAtMs = System.currentTimeMillis() + 3_000L;
                     System.out.println("[client] Nombre del grupo recibido: " + groupName);
 
-                    // Mostrar URL con scroll después de 3s
                     new Thread(() -> {
                         try {
-                            Thread.sleep(3_000L + 100L);
+                            Thread.sleep(3_100L);
                             if (url != null && !url.isEmpty()) {
                                 javax.swing.SwingUtilities.invokeLater(() -> {
                                     text = "URL: " + url;
@@ -155,7 +149,6 @@ public class Main {
                 }
 
                 case "countdown" -> {
-                    // El servidor envía value que puede ser un int o un objeto con msgCountDown
                     int value = 0;
                     JSONObject valObj = o.optJSONObject("value");
                     if (valObj != null) {
@@ -165,19 +158,16 @@ public class Main {
                     }
 
                     if (value > 0) {
-                        // CHANGED: activamos modo countdown y evitamos que se dibuje el juego
-                        countdownActive = true; // CHANGED
-                        jocActiu = false; // CHANGED: bloquear render de juego mientras cuenta atrás
-                        // Restaurar/limpiar puntuaciones para evitar mostrar puntuaciones antiguas
-                        j1Punts = 0; // CHANGED
-                        j2Punts = 0; // CHANGED
+                        countdownActive = true;
+                        jocActiu = false;
+                        j1Punts = 0;
+                        j2Punts = 0;
 
                         text = String.valueOf(value);
                         mode = Mode.TEXT;
                         System.out.println("[client] Countdown: " + value);
                     } else {
-                        // CHANGED: la cuenta atrás ha terminado
-                        countdownActive = false; // CHANGED
+                        countdownActive = false;
                         text = null;
                         mode = Mode.NONE;
                         System.out.println("[client] Countdown terminado");
@@ -186,39 +176,30 @@ public class Main {
                 }
 
                 case "serverData" -> {
-                    // Aquí procesamos lo que manda el servidor principal: serverGameData
                     JSONObject serverGame = o.optJSONObject("serverGameData");
                     if (serverGame != null) {
-                        // Siempre actualizamos puntuaciones internas (para no perder datos)
                         j1Punts = serverGame.optInt("p1Points", j1Punts);
                         j2Punts = serverGame.optInt("p2Points", j2Punts);
 
-                        // Convertir el estado del servidor al array de objetos que dibujamos
                         GameObject[] gos = GameObject.fromServerState(serverGame, WIDTH, HEIGHT, RESERVED_TOP);
                         gameObjects.clear();
                         for (GameObject go : gos) gameObjects.add(go);
 
-                        // CHANGED: No activamos la pantalla de juego si estamos en cuenta atrás.
-                        if (!countdownActive) { // CHANGED
-                            jocActiu = true; // CHANGED
-                            mode = Mode.NONE; // CHANGED
+                        if (!countdownActive) {
+                            jocActiu = true;
+                            mode = Mode.NONE;
                         } else {
-                            // Si hay countdown, mantenemos jocActiu = false para que no se muestre el juego todavía
-                            System.out.println("[client] serverData recibida pero IGNORADA para mostrar juego porque hay countdown activo");
+                            System.out.println("[client] serverData recibida pero IGNORADA porque hay countdown activo");
                         }
 
-                        // debug
                         System.out.println("[client] serverData recibida -> p1=" + j1Punts + " p2=" + j2Punts + " objs=" + gameObjects.size());
                     }
                 }
 
                 case "jocData" -> {
-                    // Compatibilidad con mensajes "jocData" antiguos/alternativos
                     String estatPartida = o.optString("estatPartida", "");
                     if (estatPartida.equals("Jugant")) {
-                        // Si hay countdown activo, no marcar juego como activo
-                        jocActiu = !countdownActive; // CHANGED: respetar countdown
-                        // Intentamos leer con el nombre nuevo del servidor y si no está, fallback al anterior
+                        jocActiu = !countdownActive;
                         j1Punts = o.optInt("p1Points", o.optInt("J1Punts", j1Punts));
                         j2Punts = o.optInt("p2Points", o.optInt("J2Punts", j2Punts));
 
@@ -260,12 +241,10 @@ public class Main {
                 }
 
                 default -> {
-                    // Ignorar otros tipos, pero loguear para depuración
                     if (!t.isEmpty()) System.out.println("[client] Tipo desconocido recibido: " + t);
                 }
             }
         } catch (Exception e) {
-            // Mostrar trazas para depurar problemas con el JSON o la conexión
             System.out.println("[client] Error procesando mensaje WS:");
             e.printStackTrace();
         }
@@ -292,11 +271,26 @@ public class Main {
             final Font font = new Font("SansSerif", Font.PLAIN, 12);
             PioMatter.flushBlack(pm, fb, 2, 10);
 
+            // ===== Mostrar QR frame.png al inicio =====
+            try {
+                BufferedImage qrImage = UtilsImage.loadImage("frame.png");
+                if (qrImage != null) {
+                    UtilsImage.drawImageFit(g, qrImage, 0, 0, WIDTH, HEIGHT, FitMode.CONTAIN);
+                    PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
+                    pm.swap();
+                    Thread.sleep(5000);
+                } else {
+                    System.out.println("[QR] No se pudo cargar frame.png");
+                }
+            } catch (Exception e) {
+                System.out.println("[QR] Error mostrando QR: " + e.getMessage());
+            }
+
             while (true) {
                 fps.beginFrame();
 
                 // PRIORIDAD: si hay countdown activo, mostrar siempre la cuenta atrás
-                if (countdownActive) { // CHANGED
+                if (countdownActive) {
                     g.setColor(Color.BLACK);
                     g.fillRect(0, 0, WIDTH, HEIGHT);
 
@@ -310,21 +304,16 @@ public class Main {
                     int y = (HEIGHT / 2) + (fm.getAscent() / 2);
                     g.drawString(display, x, y);
 
-                    // Mostrar también pequeño encabezado arriba con nombre del juego
                     g.setFont(new Font("SansSerif", Font.BOLD, 9));
                     FontMetrics fmTop = g.getFontMetrics();
                     g.drawString("PONG GAME", 1, fmTop.getAscent());
 
-                    // No continuar con render de juego
                     PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
                     pm.swap();
                     fps.endFrameAndCap(FPS_CAP);
-                    continue; // CHANGED: siguiente frame
+                    continue;
                 }
 
-                // =========================
-                // Render del juego activo
-                // =========================
                 if (jocActiu) {
                     g.setColor(Color.BLUE);
                     g.fillRect(0, RESERVED_TOP, WIDTH, HEIGHT - RESERVED_TOP);
@@ -353,9 +342,6 @@ public class Main {
                         g.fillRect(go.x, go.y, go.ancho, go.alto);
                     }
                 } else {
-                    // =========================
-                    // Render normal (no juego)
-                    // =========================
                     g.setColor(Color.BLACK);
                     g.fillRect(0, 0, WIDTH, HEIGHT);
 
@@ -376,7 +362,6 @@ public class Main {
                         FontMetrics fm = g.getFontMetrics();
                         int textWidth = fm.stringWidth(text);
 
-                        // Scroll horizontal si es necesario
                         if (textWidth > availW && scrollingText != null) {
                             long currentTime = System.currentTimeMillis();
                             if (currentTime - lastScrollTime > 100) {
@@ -420,7 +405,6 @@ public class Main {
         }
     }
 
-    /** Word-wrap de texto según ancho y alto disponible */
     private static List<String> wrapText(String s, FontMetrics fm, int maxW, int maxH) {
         ArrayList<String> out = new ArrayList<>();
         if (s == null || s.isEmpty() || maxW <= 0 || maxH <= 0) return out;
@@ -469,7 +453,6 @@ public class Main {
         return out;
     }
 
-    /** Trunca una línea y agrega ‘…’ si excede ancho */
     private static String truncateWithEllipsis(String s, FontMetrics fm, int maxW) {
         if (fm.stringWidth(s) <= maxW) return s;
         String ell = "…";
@@ -484,7 +467,6 @@ public class Main {
         return sb.toString();
     }
 
-    /** Cargar URL del servidor desde archivo JSON */
     public static String loadServerUriFromConfig() {
         try {
             String content = new String(Files.readAllBytes(Paths.get("/home/pi/Adafruit_Pi5_Piomatter/piomatter-java-jni/config.json")));
