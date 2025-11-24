@@ -51,6 +51,7 @@ public class Main {
 
     // Estado del juego
     private volatile boolean jocActiu = false;
+    private volatile boolean countdownActive = false; // CHANGED: nuevo flag para controlar countdown
     private volatile int j1Punts = 0;
     private volatile int j2Punts = 0;
     private volatile List<GameObject> gameObjects = new ArrayList<>();
@@ -164,12 +165,21 @@ public class Main {
                     }
 
                     if (value > 0) {
+                        // CHANGED: activamos modo countdown y evitamos que se dibuje el juego
+                        countdownActive = true; // CHANGED
+                        jocActiu = false; // CHANGED: bloquear render de juego mientras cuenta atrás
+                        // Restaurar/limpiar puntuaciones para evitar mostrar puntuaciones antiguas
+                        j1Punts = 0; // CHANGED
+                        j2Punts = 0; // CHANGED
+
                         text = String.valueOf(value);
                         mode = Mode.TEXT;
                         System.out.println("[client] Countdown: " + value);
                     } else {
-                        mode = Mode.NONE;
+                        // CHANGED: la cuenta atrás ha terminado
+                        countdownActive = false; // CHANGED
                         text = null;
+                        mode = Mode.NONE;
                         System.out.println("[client] Countdown terminado");
                     }
                     image = null;
@@ -179,7 +189,7 @@ public class Main {
                     // Aquí procesamos lo que manda el servidor principal: serverGameData
                     JSONObject serverGame = o.optJSONObject("serverGameData");
                     if (serverGame != null) {
-                        // Actualizamos puntuaciones si vienen
+                        // Siempre actualizamos puntuaciones internas (para no perder datos)
                         j1Punts = serverGame.optInt("p1Points", j1Punts);
                         j2Punts = serverGame.optInt("p2Points", j2Punts);
 
@@ -188,8 +198,15 @@ public class Main {
                         gameObjects.clear();
                         for (GameObject go : gos) gameObjects.add(go);
 
-                        jocActiu = true;
-                        mode = Mode.NONE;
+                        // CHANGED: No activamos la pantalla de juego si estamos en cuenta atrás.
+                        if (!countdownActive) { // CHANGED
+                            jocActiu = true; // CHANGED
+                            mode = Mode.NONE; // CHANGED
+                        } else {
+                            // Si hay countdown, mantenemos jocActiu = false para que no se muestre el juego todavía
+                            System.out.println("[client] serverData recibida pero IGNORADA para mostrar juego porque hay countdown activo");
+                        }
+
                         // debug
                         System.out.println("[client] serverData recibida -> p1=" + j1Punts + " p2=" + j2Punts + " objs=" + gameObjects.size());
                     }
@@ -199,7 +216,8 @@ public class Main {
                     // Compatibilidad con mensajes "jocData" antiguos/alternativos
                     String estatPartida = o.optString("estatPartida", "");
                     if (estatPartida.equals("Jugant")) {
-                        jocActiu = true;
+                        // Si hay countdown activo, no marcar juego como activo
+                        jocActiu = !countdownActive; // CHANGED: respetar countdown
                         // Intentamos leer con el nombre nuevo del servidor y si no está, fallback al anterior
                         j1Punts = o.optInt("p1Points", o.optInt("J1Punts", j1Punts));
                         j2Punts = o.optInt("p2Points", o.optInt("J2Punts", j2Punts));
@@ -276,6 +294,33 @@ public class Main {
 
             while (true) {
                 fps.beginFrame();
+
+                // PRIORIDAD: si hay countdown activo, mostrar siempre la cuenta atrás
+                if (countdownActive) { // CHANGED
+                    g.setColor(Color.BLACK);
+                    g.fillRect(0, 0, WIDTH, HEIGHT);
+
+                    g.setColor(Color.WHITE);
+                    Font countdownFont = new Font("SansSerif", Font.BOLD, 20);
+                    g.setFont(countdownFont);
+                    FontMetrics fm = g.getFontMetrics();
+                    String display = (text != null) ? text : "";
+                    int textW = fm.stringWidth(display);
+                    int x = Math.max(0, (WIDTH - textW) / 2);
+                    int y = (HEIGHT / 2) + (fm.getAscent() / 2);
+                    g.drawString(display, x, y);
+
+                    // Mostrar también pequeño encabezado arriba con nombre del juego
+                    g.setFont(new Font("SansSerif", Font.BOLD, 9));
+                    FontMetrics fmTop = g.getFontMetrics();
+                    g.drawString("PONG GAME", 1, fmTop.getAscent());
+
+                    // No continuar con render de juego
+                    PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
+                    pm.swap();
+                    fps.endFrameAndCap(FPS_CAP);
+                    continue; // CHANGED: siguiente frame
+                }
 
                 // =========================
                 // Render del juego activo
