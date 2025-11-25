@@ -55,6 +55,12 @@ public class Main {
     private volatile int j1Punts = 0;
     private volatile int j2Punts = 0;
     private volatile List<GameObject> gameObjects = new ArrayList<>();
+    // NUEVAS VARIABLES PARA GOLES Y GANADOR
+    private volatile boolean golCountdownActive = false;
+    private volatile int golCountdownValue = 0;
+    private volatile boolean showWinnerActive = false;
+    private volatile String winnerText = null;
+
 
 
     /** Constructor: inicializa WebSocket y muestra la URL inicial */
@@ -217,6 +223,17 @@ public class Main {
                         jocActiu = false;
                         gameObjects.clear();
                     }
+                    if (estatPartida.equals("Gol")) {          // cuando hay gol
+                        golCountdownValue = 3;
+                        golCountdownActive = true;
+                        jocActiu = false;
+                    }
+                    if (estatPartida.equals("Final")) {       // al final del juego
+                        golCountdownActive = false;
+                        jocActiu = false;
+                        winnerText = o.optString("winner", "Empate");
+                        showWinnerActive = true;
+                    }
                 }
 
                 case "image" -> {
@@ -288,6 +305,90 @@ public class Main {
 
             while (true) {
                 fps.beginFrame();
+
+                // ============================
+                // Gol countdown
+                if (golCountdownActive) {
+                    g.setColor(Color.BLACK);
+                    g.fillRect(0, 0, WIDTH, HEIGHT);
+
+                    g.setColor(Color.YELLOW);
+                    Font countdownFont = new Font("SansSerif", Font.BOLD, 20);
+                    g.setFont(countdownFont);
+                    FontMetrics fm = g.getFontMetrics();
+                    String display = String.valueOf(golCountdownValue);
+                    int x = (WIDTH - fm.stringWidth(display)) / 2;
+                    int y = (HEIGHT / 2) + (fm.getAscent() / 2);
+                    g.drawString(display, x, y);
+
+                    PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
+                    pm.swap();
+                    fps.endFrameAndCap(FPS_CAP);
+
+                    long start = System.currentTimeMillis();
+                    while (golCountdownValue > 0) {
+                        if (System.currentTimeMillis() - start >= 1000) {
+                            golCountdownValue--;
+                            start = System.currentTimeMillis();
+                        }
+                        Thread.sleep(10);
+                    }
+                    golCountdownActive = false;
+                    continue;
+                }
+
+                // Mostrar ganador
+                if (showWinnerActive) {
+                    g.setColor(Color.BLACK);
+                    g.fillRect(0, 0, WIDTH, HEIGHT);
+
+                    g.setColor(Color.GREEN);
+                    Font winnerFont = new Font("SansSerif", Font.BOLD, 20);
+                    g.setFont(winnerFont);
+                    FontMetrics fm = g.getFontMetrics();
+                    String display = winnerText + " WIN!";
+                    int x = (WIDTH - fm.stringWidth(display)) / 2;
+                    int y = (HEIGHT / 2) + (fm.getAscent() / 2);
+                    g.drawString(display, x, y);
+
+                    PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
+                    pm.swap();
+                    Thread.sleep(4000);  // Mostrar ganador unos segundos
+                    showWinnerActive = false;
+                    jocActiu = false;
+                    continue;
+                }
+
+                // Esperando jugadores
+                if (!jocActiu && !countdownActive && !golCountdownActive && !showWinnerActive) {
+                    g.setColor(Color.BLACK);
+                    g.fillRect(0, 0, WIDTH, HEIGHT);
+
+                    g.setColor(Color.WHITE);
+                    Font waitFont = new Font("SansSerif", Font.PLAIN, 10);
+                    g.setFont(waitFont);
+                    FontMetrics fm = g.getFontMetrics();
+                    String message = "Esperando jugadores...";
+                    int x = (WIDTH - fm.stringWidth(message)) / 2;
+                    int y = (HEIGHT / 2) + (fm.getAscent() / 2);
+                    g.drawString(message, x, y);
+                }
+                // ============================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
                 // PRIORIDAD: si hay countdown activo, mostrar siempre la cuenta atrás
                 if (countdownActive) {
