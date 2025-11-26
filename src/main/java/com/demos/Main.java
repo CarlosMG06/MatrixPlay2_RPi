@@ -50,25 +50,25 @@ public class Main {
     private final UtilsWS ws;
 
     // Estado del juego
-    private volatile boolean jocActiu = false;             // legacy flag (seguimos manteniéndola por compat)
-    private volatile boolean countdownActive = false;      // legacy flag
+    private volatile boolean jocActiu = false;             
+    private volatile boolean countdownActive = false;      
     private volatile int j1Punts = 0;
     private volatile int j2Punts = 0;
     private volatile List<GameObject> gameObjects = new ArrayList<>();
 
     // NUEVAS VARIABLES PARA GOLES Y GANADOR (usaremos gameState en vez de sleeps)
-    private volatile boolean golCountdownActive = false;  // legacy flag
-    private volatile int golCountdownValue = 0;           // legacy counter (inicializado desde mensajes)
-    private volatile boolean showWinnerActive = false;    // legacy flag
+    private volatile boolean golCountdownActive = false;  
+    private volatile int golCountdownValue = 0;           
+    private volatile boolean showWinnerActive = false;    
     private volatile String winnerText = null;
 
     private enum GameState { WAITING, COUNTDOWN, PLAYING, GOAL, WINNER }
     private volatile GameState gameState = GameState.WAITING;
 
     // Temporizadores no bloqueantes
-    private volatile long stateStartMs = 0L;           // inicio del estado (countdown/goal)
-    private volatile int stateCountdownValue = 0;     // cuenta para GOAL / COUNTDOWN
-    private volatile long winnerStartMs = 0L;         // inicio del estado WINNER
+    private volatile long stateStartMs = 0L;           
+    private volatile int stateCountdownValue = 0;     
+    private volatile long winnerStartMs = 0L;         
 
     /** Constructor: inicializa WebSocket y muestra la URL inicial */
     public Main(String serverUri) {
@@ -173,7 +173,7 @@ public class Main {
 
                     // Estado COUNTDOWN: muestra 3..0 antes del inicio de la partida
                     if (value > 0) {
-                        countdownActive = true;          // legacy flag
+                        countdownActive = true;          
                         gameState = GameState.COUNTDOWN;
                         stateCountdownValue = value;
                         stateStartMs = System.currentTimeMillis();
