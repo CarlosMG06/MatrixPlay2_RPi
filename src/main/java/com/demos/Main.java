@@ -281,7 +281,7 @@ public class Main {
                     j1Punts = 0;
                     j2Punts = 0;
                     gameObjects.clear();
-                    text = "Esperando jugadores";
+                    text = "Waiting";
                     mode = Mode.TEXT;
                     expireAtMs = System.currentTimeMillis() + 30_000L;
                     System.out.println("[client] waitingScreen recibido -> mostrando pantalla de espera");
@@ -345,7 +345,7 @@ public class Main {
             g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_OFF);
             g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
 
-            final Font font = new Font("SansSerif", Font.PLAIN, 12);
+            final Font font = new Font("SansSerif", Font.PLAIN, 9);
             PioMatter.flushBlack(pm, fb, 2, 10);
 
             // ===== Mostrar QR frame.png al inicio =====
@@ -374,24 +374,39 @@ public class Main {
                 // Prioridad de estados: WINNER > GOAL > COUNTDOWN > PLAYING > WAITING
                 switch (gameState) {
                     case WINNER -> {
-                        // Mostrar ganador durante 4s (no bloqueante)
                         g.setColor(Color.GREEN);
-                        Font winnerFont = new Font("SansSerif", Font.BOLD, 18);
+                        Font winnerFont = new Font("SansSerif", Font.BOLD, 8);
                         g.setFont(winnerFont);
                         FontMetrics fm = g.getFontMetrics();
-                        String display = (winnerText != null ? winnerText + " WIN!" : "GANADOR");
-                        int x = (WIDTH - fm.stringWidth(display)) / 2;
-                        int y = (HEIGHT / 2) + (fm.getAscent() / 2);
-                        g.drawString(display, x, y);
 
-                        if (winnerStartMs == 0) winnerStartMs = now;
-                        if (now - winnerStartMs >= 4000) {
-                            // fin mostrar ganador -> volver a WAITING
+                        // Línea 1: "WIN:"
+                        String l1 = "WIN:";
+
+                        // Línea 2: nombre del ganador o "???"
+                        String l2 = (winnerText != null ? winnerText : "???");
+
+                        // Altura total de las dos líneas
+                        int lineHeight = fm.getHeight();
+                        int totalHeight = lineHeight * 2;
+
+                        // Posición vertical para centrar el bloque
+                        int startY = (HEIGHT - totalHeight) / 2 + fm.getAscent();
+
+                        // Dibujar línea 1 centrada horizontalmente
+                        int x1 = (WIDTH - fm.stringWidth(l1)) / 2;
+                        g.drawString(l1, x1, startY);
+
+                        // Dibujar línea 2 centrada horizontalmente
+                        int x2 = (WIDTH - fm.stringWidth(l2)) / 2;
+                        g.drawString(l2, x2, startY + lineHeight);
+
+                        // Temporizador para volver a WAITING
+                        if (winnerStartMs == 0) winnerStartMs = System.currentTimeMillis();
+                        if (System.currentTimeMillis() - winnerStartMs >= 4000) {
                             winnerStartMs = 0;
                             showWinnerActive = false;
                             gameState = GameState.WAITING;
                             jocActiu = false;
-                            // limpiamos datos para no mostrar partida anterior
                             gameObjects.clear();
                             j1Punts = 0;
                             j2Punts = 0;
@@ -400,6 +415,7 @@ public class Main {
                             expireAtMs = System.currentTimeMillis() + 8000;
                         }
                     }
+
 
                     case GOAL -> {
                         // Mostrar cuenta de gol sin bloquear, decrementar por segundo
@@ -534,7 +550,7 @@ public class Main {
                             Font waitFont = new Font("SansSerif", Font.PLAIN, 10);
                             g.setFont(waitFont);
                             FontMetrics fm = g.getFontMetrics();
-                            String message = "Esperando jugadores...";
+                            String message = "Waiting...";
                             int x = (WIDTH - fm.stringWidth(message)) / 2;
                             int y = (HEIGHT / 2) + (fm.getAscent() / 2);
                             g.drawString(message, x, y);
