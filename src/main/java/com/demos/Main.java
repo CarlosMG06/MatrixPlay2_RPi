@@ -51,9 +51,16 @@ public class Main {
 
     // Estado del juego
     private volatile boolean jocActiu = false;
+    private volatile boolean countdownActive = false;
     private volatile int j1Punts = 0;
     private volatile int j2Punts = 0;
     private volatile List<GameObject> gameObjects = new ArrayList<>();
+    // NUEVAS VARIABLES PARA GOLES Y GANADOR
+    private volatile boolean golCountdownActive = false;
+    private volatile int golCountdownValue = 0;
+    private volatile boolean showWinnerActive = false;
+    private volatile String winnerText = null;
+
 
 
     /** Constructor: inicializa WebSocket y muestra la URL inicial */
@@ -76,13 +83,11 @@ public class Main {
     /** Se ejecuta cuando el WebSocket se abre */
     private void onWsOpen(String msg) {
         try {
-            // Identificación inicial
             JSONObject jo = new JSONObject();
             jo.put("type", "checkMyName");
             jo.put("value", "raspberryClient");
             ws.safeSend(jo.toString());
 
-            // Solicitud de configuración inicial si no está ya configurado
             if (!alreadyConfigured) {
                 JSONObject jsonObject = new JSONObject();
                 jsonObject.put("type", "raspberry");
@@ -99,13 +104,11 @@ public class Main {
     /** Procesa los mensajes recibidos del servidor */
     private void onWsMessage(String msg) {
         try {
-            // Log del raw message para depuración
             System.out.println("[client] RAW WS MSG: " + msg);
 
             JSONObject o = new JSONObject(msg);
             String t = o.optString("type", "");
 
-            // Actualizamos expireAtMs solo si no es estado de juego
             if (!t.equals("jocData")) {
                 long ttl = Math.max(1, o.optLong("ttl_ms", 5000L));
                 expireAtMs = System.currentTimeMillis() + ttl;
@@ -120,7 +123,6 @@ public class Main {
                 }
 
                 case "config" -> {
-                    // Procesar configuración enviada por el servidor
                     String groupName = o.optString("groupName", "groupName desconocido");
                     String url = o.optString("url", "url desconocida");
 
@@ -132,10 +134,9 @@ public class Main {
                     expireAtMs = System.currentTimeMillis() + 3_000L;
                     System.out.println("[client] Nombre del grupo recibido: " + groupName);
 
-                    // Mostrar URL con scroll después de 3s
                     new Thread(() -> {
                         try {
-                            Thread.sleep(3_000L + 100L);
+                            Thread.sleep(3_100L);
                             if (url != null && !url.isEmpty()) {
                                 javax.swing.SwingUtilities.invokeLater(() -> {
                                     text = "URL: " + url;
@@ -154,7 +155,6 @@ public class Main {
                 }
 
                 case "countdown" -> {
-                    // El servidor envía value que puede ser un int o un objeto con msgCountDown
                     int value = 0;
                     JSONObject valObj = o.optJSONObject("value");
                     if (valObj != null) {
@@ -164,43 +164,48 @@ public class Main {
                     }
 
                     if (value > 0) {
+                        countdownActive = true;
+                        jocActiu = false;
+                        j1Punts = 0;
+                        j2Punts = 0;
+
                         text = String.valueOf(value);
                         mode = Mode.TEXT;
                         System.out.println("[client] Countdown: " + value);
                     } else {
-                        mode = Mode.NONE;
+                        countdownActive = false;
                         text = null;
+                        mode = Mode.NONE;
                         System.out.println("[client] Countdown terminado");
                     }
                     image = null;
                 }
 
                 case "serverData" -> {
-                    // Aquí procesamos lo que manda el servidor principal: serverGameData
                     JSONObject serverGame = o.optJSONObject("serverGameData");
                     if (serverGame != null) {
-                        // Actualizamos puntuaciones si vienen
                         j1Punts = serverGame.optInt("p1Points", j1Punts);
                         j2Punts = serverGame.optInt("p2Points", j2Punts);
 
-                        // Convertir el estado del servidor al array de objetos que dibujamos
                         GameObject[] gos = GameObject.fromServerState(serverGame, WIDTH, HEIGHT, RESERVED_TOP);
                         gameObjects.clear();
                         for (GameObject go : gos) gameObjects.add(go);
 
-                        jocActiu = true;
-                        mode = Mode.NONE;
-                        // debug
+                        if (!countdownActive) {
+                            jocActiu = true;
+                            mode = Mode.NONE;
+                        } else {
+                            System.out.println("[client] serverData recibida pero IGNORADA porque hay countdown activo");
+                        }
+
                         System.out.println("[client] serverData recibida -> p1=" + j1Punts + " p2=" + j2Punts + " objs=" + gameObjects.size());
                     }
                 }
 
                 case "jocData" -> {
-                    // Compatibilidad con mensajes "jocData" antiguos/alternativos
                     String estatPartida = o.optString("estatPartida", "");
                     if (estatPartida.equals("Jugant")) {
-                        jocActiu = true;
-                        // Intentamos leer con el nombre nuevo del servidor y si no está, fallback al anterior
+                        jocActiu = !countdownActive;
                         j1Punts = o.optInt("p1Points", o.optInt("J1Punts", j1Punts));
                         j2Punts = o.optInt("p2Points", o.optInt("J2Punts", j2Punts));
 
@@ -217,6 +222,17 @@ public class Main {
                     } else {
                         jocActiu = false;
                         gameObjects.clear();
+                    }
+                    if (estatPartida.equals("Gol")) {          // cuando hay gol
+                        golCountdownValue = 3;
+                        golCountdownActive = true;
+                        jocActiu = false;
+                    }
+                    if (estatPartida.equals("Final")) {       // al final del juego
+                        golCountdownActive = false;
+                        jocActiu = false;
+                        winnerText = o.optString("winner", "Empate");
+                        showWinnerActive = true;
                     }
                 }
 
@@ -242,12 +258,10 @@ public class Main {
                 }
 
                 default -> {
-                    // Ignorar otros tipos, pero loguear para depuración
                     if (!t.isEmpty()) System.out.println("[client] Tipo desconocido recibido: " + t);
                 }
             }
         } catch (Exception e) {
-            // Mostrar trazas para depurar problemas con el JSON o la conexión
             System.out.println("[client] Error procesando mensaje WS:");
             e.printStackTrace();
         }
@@ -274,12 +288,133 @@ public class Main {
             final Font font = new Font("SansSerif", Font.PLAIN, 12);
             PioMatter.flushBlack(pm, fb, 2, 10);
 
+            // ===== Mostrar QR frame.png al inicio =====
+            try {
+                BufferedImage qrImage = UtilsImage.loadImage("frame.png");
+                if (qrImage != null) {
+                    UtilsImage.drawImageFit(g, qrImage, 0, 0, WIDTH, HEIGHT, FitMode.CONTAIN);
+                    PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
+                    pm.swap();
+                    Thread.sleep(10000);
+                } else {
+                    System.out.println("[QR] No se pudo cargar frame.png");
+                }
+            } catch (Exception e) {
+                System.out.println("[QR] Error mostrando QR: " + e.getMessage());
+            }
+
             while (true) {
                 fps.beginFrame();
 
-                // =========================
-                // Render del juego activo
-                // =========================
+                // ============================
+                // Gol countdown
+                if (golCountdownActive) {
+                    g.setColor(Color.BLACK);
+                    g.fillRect(0, 0, WIDTH, HEIGHT);
+
+                    g.setColor(Color.YELLOW);
+                    Font countdownFont = new Font("SansSerif", Font.BOLD, 20);
+                    g.setFont(countdownFont);
+                    FontMetrics fm = g.getFontMetrics();
+                    String display = String.valueOf(golCountdownValue);
+                    int x = (WIDTH - fm.stringWidth(display)) / 2;
+                    int y = (HEIGHT / 2) + (fm.getAscent() / 2);
+                    g.drawString(display, x, y);
+
+                    PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
+                    pm.swap();
+                    fps.endFrameAndCap(FPS_CAP);
+
+                    long start = System.currentTimeMillis();
+                    while (golCountdownValue > 0) {
+                        if (System.currentTimeMillis() - start >= 1000) {
+                            golCountdownValue--;
+                            start = System.currentTimeMillis();
+                        }
+                        Thread.sleep(10);
+                    }
+                    golCountdownActive = false;
+                    continue;
+                }
+
+                // Mostrar ganador
+                if (showWinnerActive) {
+                    g.setColor(Color.BLACK);
+                    g.fillRect(0, 0, WIDTH, HEIGHT);
+
+                    g.setColor(Color.GREEN);
+                    Font winnerFont = new Font("SansSerif", Font.BOLD, 20);
+                    g.setFont(winnerFont);
+                    FontMetrics fm = g.getFontMetrics();
+                    String display = winnerText + " WIN!";
+                    int x = (WIDTH - fm.stringWidth(display)) / 2;
+                    int y = (HEIGHT / 2) + (fm.getAscent() / 2);
+                    g.drawString(display, x, y);
+
+                    PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
+                    pm.swap();
+                    Thread.sleep(4000);  // Mostrar ganador unos segundos
+                    showWinnerActive = false;
+                    jocActiu = false;
+                    continue;
+                }
+
+                // Esperando jugadores
+                if (!jocActiu && !countdownActive && !golCountdownActive && !showWinnerActive) {
+                    g.setColor(Color.BLACK);
+                    g.fillRect(0, 0, WIDTH, HEIGHT);
+
+                    g.setColor(Color.WHITE);
+                    Font waitFont = new Font("SansSerif", Font.PLAIN, 10);
+                    g.setFont(waitFont);
+                    FontMetrics fm = g.getFontMetrics();
+                    String message = "Esperando jugadores...";
+                    int x = (WIDTH - fm.stringWidth(message)) / 2;
+                    int y = (HEIGHT / 2) + (fm.getAscent() / 2);
+                    g.drawString(message, x, y);
+                }
+                // ============================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                // PRIORIDAD: si hay countdown activo, mostrar siempre la cuenta atrás
+                if (countdownActive) {
+                    g.setColor(Color.BLACK);
+                    g.fillRect(0, 0, WIDTH, HEIGHT);
+
+                    g.setColor(Color.WHITE);
+                    Font countdownFont = new Font("SansSerif", Font.BOLD, 20);
+                    g.setFont(countdownFont);
+                    FontMetrics fm = g.getFontMetrics();
+                    String display = (text != null) ? text : "";
+                    int textW = fm.stringWidth(display);
+                    int x = Math.max(0, (WIDTH - textW) / 2);
+                    int y = (HEIGHT / 2) + (fm.getAscent() / 2);
+                    g.drawString(display, x, y);
+
+                    g.setFont(new Font("SansSerif", Font.BOLD, 9));
+                    FontMetrics fmTop = g.getFontMetrics();
+                    g.drawString("PONG GAME", 1, fmTop.getAscent());
+
+                    PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
+                    pm.swap();
+                    fps.endFrameAndCap(FPS_CAP);
+                    continue;
+                }
+
                 if (jocActiu) {
                     g.setColor(Color.BLUE);
                     g.fillRect(0, RESERVED_TOP, WIDTH, HEIGHT - RESERVED_TOP);
@@ -308,9 +443,6 @@ public class Main {
                         g.fillRect(go.x, go.y, go.ancho, go.alto);
                     }
                 } else {
-                    // =========================
-                    // Render normal (no juego)
-                    // =========================
                     g.setColor(Color.BLACK);
                     g.fillRect(0, 0, WIDTH, HEIGHT);
 
@@ -331,7 +463,6 @@ public class Main {
                         FontMetrics fm = g.getFontMetrics();
                         int textWidth = fm.stringWidth(text);
 
-                        // Scroll horizontal si es necesario
                         if (textWidth > availW && scrollingText != null) {
                             long currentTime = System.currentTimeMillis();
                             if (currentTime - lastScrollTime > 100) {
@@ -375,7 +506,6 @@ public class Main {
         }
     }
 
-    /** Word-wrap de texto según ancho y alto disponible */
     private static List<String> wrapText(String s, FontMetrics fm, int maxW, int maxH) {
         ArrayList<String> out = new ArrayList<>();
         if (s == null || s.isEmpty() || maxW <= 0 || maxH <= 0) return out;
@@ -424,7 +554,6 @@ public class Main {
         return out;
     }
 
-    /** Trunca una línea y agrega ‘…’ si excede ancho */
     private static String truncateWithEllipsis(String s, FontMetrics fm, int maxW) {
         if (fm.stringWidth(s) <= maxW) return s;
         String ell = "…";
@@ -439,7 +568,6 @@ public class Main {
         return sb.toString();
     }
 
-    /** Cargar URL del servidor desde archivo JSON */
     public static String loadServerUriFromConfig() {
         try {
             String content = new String(Files.readAllBytes(Paths.get("/home/pi/Adafruit_Pi5_Piomatter/piomatter-java-jni/config.json")));
