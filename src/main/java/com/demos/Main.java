@@ -50,18 +50,25 @@ public class Main {
     private final UtilsWS ws;
 
     // Estado del juego
-    private volatile boolean jocActiu = false;
-    private volatile boolean countdownActive = false;
+    private volatile boolean jocActiu = false;             // legacy flag (seguimos manteniéndola por compat)
+    private volatile boolean countdownActive = false;      // legacy flag
     private volatile int j1Punts = 0;
     private volatile int j2Punts = 0;
     private volatile List<GameObject> gameObjects = new ArrayList<>();
-    // NUEVAS VARIABLES PARA GOLES Y GANADOR
-    private volatile boolean golCountdownActive = false;
-    private volatile int golCountdownValue = 0;
-    private volatile boolean showWinnerActive = false;
+
+    // NUEVAS VARIABLES PARA GOLES Y GANADOR (usaremos gameState en vez de sleeps)
+    private volatile boolean golCountdownActive = false;  // legacy flag
+    private volatile int golCountdownValue = 0;           // legacy counter (inicializado desde mensajes)
+    private volatile boolean showWinnerActive = false;    // legacy flag
     private volatile String winnerText = null;
 
+    private enum GameState { WAITING, COUNTDOWN, PLAYING, GOAL, WINNER }
+    private volatile GameState gameState = GameState.WAITING;
 
+    // Temporizadores no bloqueantes
+    private volatile long stateStartMs = 0L;           // inicio del estado (countdown/goal)
+    private volatile int stateCountdownValue = 0;     // cuenta para GOAL / COUNTDOWN
+    private volatile long winnerStartMs = 0L;         // inicio del estado WINNER
 
     /** Constructor: inicializa WebSocket y muestra la URL inicial */
     public Main(String serverUri) {
@@ -109,7 +116,8 @@ public class Main {
             JSONObject o = new JSONObject(msg);
             String t = o.optString("type", "");
 
-            if (!t.equals("jocData")) {
+            // TTL para mensajes de texto/imagen
+            if (!t.equals("jocData") && !t.equals("serverData")) {
                 long ttl = Math.max(1, o.optLong("ttl_ms", 5000L));
                 expireAtMs = System.currentTimeMillis() + ttl;
             }
@@ -154,36 +162,44 @@ public class Main {
                     }).start();
                 }
 
-                case "countdown" -> {
+                // Mensaje de countdown general (server -> cliente). Hay varios formatos usados en el proyecto,
+                // aceptamos tanto "countdown" como "roundCountDown" (añadido abajo).
+                case "countdown", "roundCountDown" -> {
+                    // Puede venir value como int o como objeto con msgCountDown
                     int value = 0;
                     JSONObject valObj = o.optJSONObject("value");
-                    if (valObj != null) {
-                        value = valObj.optInt("msgCountDown", 0);
-                    } else {
-                        value = o.optInt("value", 0);
-                    }
+                    if (valObj != null) value = valObj.optInt("msgCountDown", 0);
+                    else value = o.optInt("value", 0);
 
+                    // Estado COUNTDOWN: muestra 3..0 antes del inicio de la partida
                     if (value > 0) {
-                        countdownActive = true;
+                        countdownActive = true;          // legacy flag
+                        gameState = GameState.COUNTDOWN;
+                        stateCountdownValue = value;
+                        stateStartMs = System.currentTimeMillis();
                         jocActiu = false;
-                        j1Punts = 0;
-                        j2Punts = 0;
-
                         text = String.valueOf(value);
                         mode = Mode.TEXT;
-                        System.out.println("[client] Countdown: " + value);
+                        System.out.println("[client] COUNTDOWN entró -> " + value);
                     } else {
+                        // value == 0 -> final countdown
                         countdownActive = false;
+                        if (gameState == GameState.COUNTDOWN) {
+                            gameState = GameState.PLAYING;
+                            stateStartMs = 0;
+                        }
                         text = null;
                         mode = Mode.NONE;
-                        System.out.println("[client] Countdown terminado");
+                        System.out.println("[client] COUNTDOWN terminado");
                     }
+
                     image = null;
                 }
 
                 case "serverData" -> {
                     JSONObject serverGame = o.optJSONObject("serverGameData");
                     if (serverGame != null) {
+                        // Actualizamos siempre las posiciones y puntos
                         j1Punts = serverGame.optInt("p1Points", j1Punts);
                         j2Punts = serverGame.optInt("p2Points", j2Punts);
 
@@ -191,11 +207,11 @@ public class Main {
                         gameObjects.clear();
                         for (GameObject go : gos) gameObjects.add(go);
 
-                        if (!countdownActive) {
-                            jocActiu = true;
-                            mode = Mode.NONE;
-                        } else {
-                            System.out.println("[client] serverData recibida pero IGNORADA porque hay countdown activo");
+                        // Si no estamos en un estado de prioridad, pasamos a PLAYING
+                        if (gameState == GameState.WAITING) {
+                            // mantener WAITING hasta que recibamos otro trigger (waitingScreen) o hasta que jugadores se conecten
+                        } else if (gameState != GameState.COUNTDOWN && gameState != GameState.GOAL && gameState != GameState.WINNER) {
+                            gameState = GameState.PLAYING;
                         }
 
                         System.out.println("[client] serverData recibida -> p1=" + j1Punts + " p2=" + j2Punts + " objs=" + gameObjects.size());
@@ -204,7 +220,8 @@ public class Main {
 
                 case "jocData" -> {
                     String estatPartida = o.optString("estatPartida", "");
-                    if (estatPartida.equals("Jugant")) {
+                    if ("Jugant".equals(estatPartida)) {
+                        // actualizar posiciones/puntos (compatibilidad)
                         jocActiu = !countdownActive;
                         j1Punts = o.optInt("p1Points", o.optInt("J1Punts", j1Punts));
                         j2Punts = o.optInt("p2Points", o.optInt("J2Punts", j2Punts));
@@ -219,21 +236,64 @@ public class Main {
                                 gameObjects.add(go);
                             }
                         }
+                        // pasar a PLAYING si procede
+                        if (gameState != GameState.COUNTDOWN && gameState != GameState.GOAL && gameState != GameState.WINNER) {
+                            gameState = GameState.PLAYING;
+                        }
                     } else {
+                        // Otros estados informados por servidor via jocData: Gol, Final, etc.
                         jocActiu = false;
+                        // limpiar objetos (evita ver partida anterior cuando hay solo 1 jugador)
                         gameObjects.clear();
                     }
-                    if (estatPartida.equals("Gol")) {          // cuando hay gol
+
+                    if ("Gol".equals(estatPartida)) {          // cuando hay gol (servidor indica Gol)
                         golCountdownValue = 3;
                         golCountdownActive = true;
+                        stateCountdownValue = golCountdownValue;
+                        stateStartMs = System.currentTimeMillis();
+                        gameState = GameState.GOAL;
                         jocActiu = false;
+                        System.out.println("[client] JocData: Gol -> iniciando GOAL countdown");
                     }
-                    if (estatPartida.equals("Final")) {       // al final del juego
+                    if ("Final".equals(estatPartida)) {       // al final del juego (servidor indica Final)
                         golCountdownActive = false;
                         jocActiu = false;
                         winnerText = o.optString("winner", "Empate");
                         showWinnerActive = true;
+                        gameState = GameState.WINNER;
+                        winnerStartMs = System.currentTimeMillis();
+                        System.out.println("[client] JocData: Final -> ganador: " + winnerText);
                     }
+                }
+
+                case "waitingScreen" -> {
+                    // Mensaje explícito para pantalla de espera
+                    gameState = GameState.WAITING;
+                    jocActiu = false;
+                    countdownActive = false;
+                    golCountdownActive = false;
+                    showWinnerActive = false;
+                    stateStartMs = 0;
+                    stateCountdownValue = 0;
+                    winnerStartMs = 0;
+                    winnerText = null;
+                    j1Punts = 0;
+                    j2Punts = 0;
+                    gameObjects.clear();
+                    text = "Esperando jugadores";
+                    mode = Mode.TEXT;
+                    expireAtMs = System.currentTimeMillis() + 30_000L;
+                    System.out.println("[client] waitingScreen recibido -> mostrando pantalla de espera");
+                }
+
+                case "winner" -> {
+                    // Mensaje tipo winner (servidor directo)
+                    winnerText = o.optString("value", o.optString("winner", "Empate"));
+                    showWinnerActive = true;
+                    gameState = GameState.WINNER;
+                    winnerStartMs = System.currentTimeMillis();
+                    System.out.println("[client] winner recibido -> " + winnerText);
                 }
 
                 case "image" -> {
@@ -267,7 +327,7 @@ public class Main {
         }
     }
 
-    /** Bucle principal de renderizado en la RPi */
+    /** Bucle principal de renderizado en la RPi (no bloqueante) */
     public void run() {
         PioMatter pm = null;
         PioMatter.FB fb = null;
@@ -295,7 +355,7 @@ public class Main {
                     UtilsImage.drawImageFit(g, qrImage, 0, 0, WIDTH, HEIGHT, FitMode.CONTAIN);
                     PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
                     pm.swap();
-                    Thread.sleep(10000);
+                    Thread.sleep(10000); // breve bloqueo inicial OK
                 } else {
                     System.out.println("[QR] No se pudo cargar frame.png");
                 }
@@ -305,194 +365,193 @@ public class Main {
 
             while (true) {
                 fps.beginFrame();
+                long now = System.currentTimeMillis();
 
-                // ============================
-                // Gol countdown
-                if (golCountdownActive) {
-                    g.setColor(Color.BLACK);
-                    g.fillRect(0, 0, WIDTH, HEIGHT);
+                // limpiamos el fondo por defecto
+                g.setColor(Color.BLACK);
+                g.fillRect(0, 0, WIDTH, HEIGHT);
 
-                    g.setColor(Color.YELLOW);
-                    Font countdownFont = new Font("SansSerif", Font.BOLD, 20);
-                    g.setFont(countdownFont);
-                    FontMetrics fm = g.getFontMetrics();
-                    String display = String.valueOf(golCountdownValue);
-                    int x = (WIDTH - fm.stringWidth(display)) / 2;
-                    int y = (HEIGHT / 2) + (fm.getAscent() / 2);
-                    g.drawString(display, x, y);
-
-                    PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
-                    pm.swap();
-                    fps.endFrameAndCap(FPS_CAP);
-
-                    long start = System.currentTimeMillis();
-                    while (golCountdownValue > 0) {
-                        if (System.currentTimeMillis() - start >= 1000) {
-                            golCountdownValue--;
-                            start = System.currentTimeMillis();
-                        }
-                        Thread.sleep(10);
-                    }
-                    golCountdownActive = false;
-                    continue;
-                }
-
-                // Mostrar ganador
-                if (showWinnerActive) {
-                    g.setColor(Color.BLACK);
-                    g.fillRect(0, 0, WIDTH, HEIGHT);
-
-                    g.setColor(Color.GREEN);
-                    Font winnerFont = new Font("SansSerif", Font.BOLD, 20);
-                    g.setFont(winnerFont);
-                    FontMetrics fm = g.getFontMetrics();
-                    String display = winnerText + " WIN!";
-                    int x = (WIDTH - fm.stringWidth(display)) / 2;
-                    int y = (HEIGHT / 2) + (fm.getAscent() / 2);
-                    g.drawString(display, x, y);
-
-                    PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
-                    pm.swap();
-                    Thread.sleep(4000);  // Mostrar ganador unos segundos
-                    showWinnerActive = false;
-                    jocActiu = false;
-                    continue;
-                }
-
-                // Esperando jugadores
-                if (!jocActiu && !countdownActive && !golCountdownActive && !showWinnerActive) {
-                    g.setColor(Color.BLACK);
-                    g.fillRect(0, 0, WIDTH, HEIGHT);
-
-                    g.setColor(Color.WHITE);
-                    Font waitFont = new Font("SansSerif", Font.PLAIN, 10);
-                    g.setFont(waitFont);
-                    FontMetrics fm = g.getFontMetrics();
-                    String message = "Esperando jugadores...";
-                    int x = (WIDTH - fm.stringWidth(message)) / 2;
-                    int y = (HEIGHT / 2) + (fm.getAscent() / 2);
-                    g.drawString(message, x, y);
-                }
-                // ============================
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                // PRIORIDAD: si hay countdown activo, mostrar siempre la cuenta atrás
-                if (countdownActive) {
-                    g.setColor(Color.BLACK);
-                    g.fillRect(0, 0, WIDTH, HEIGHT);
-
-                    g.setColor(Color.WHITE);
-                    Font countdownFont = new Font("SansSerif", Font.BOLD, 20);
-                    g.setFont(countdownFont);
-                    FontMetrics fm = g.getFontMetrics();
-                    String display = (text != null) ? text : "";
-                    int textW = fm.stringWidth(display);
-                    int x = Math.max(0, (WIDTH - textW) / 2);
-                    int y = (HEIGHT / 2) + (fm.getAscent() / 2);
-                    g.drawString(display, x, y);
-
-                    g.setFont(new Font("SansSerif", Font.BOLD, 9));
-                    FontMetrics fmTop = g.getFontMetrics();
-                    g.drawString("PONG GAME", 1, fmTop.getAscent());
-
-                    PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
-                    pm.swap();
-                    fps.endFrameAndCap(FPS_CAP);
-                    continue;
-                }
-
-                if (jocActiu) {
-                    g.setColor(Color.BLUE);
-                    g.fillRect(0, RESERVED_TOP, WIDTH, HEIGHT - RESERVED_TOP);
-
-                    g.setColor(Color.BLACK);
-                    g.fillRect(0, 0, WIDTH, RESERVED_TOP);
-
-                    g.setColor(Color.WHITE);
-                    Font scoreFont = new Font("SansSerif", Font.BOLD, 10);
-                    g.setFont(scoreFont);
-                    FontMetrics fmTop = g.getFontMetrics();
-
-                    g.drawString(String.valueOf(j1Punts), 2, fmTop.getAscent());
-                    g.drawString(String.valueOf(j2Punts),
-                            WIDTH - fmTop.stringWidth(String.valueOf(j2Punts)) - 2,
-                            fmTop.getAscent());
-
-                    for (GameObject go : new ArrayList<>(gameObjects)) {
-                        Color col = switch (go.color.toUpperCase()) {
-                            case "RED" -> Color.RED;
-                            case "BLACK" -> Color.BLACK;
-                            case "WHITE" -> Color.WHITE;
-                            default -> Color.GRAY;
-                        };
-                        g.setColor(col);
-                        g.fillRect(go.x, go.y, go.ancho, go.alto);
-                    }
-                } else {
-                    g.setColor(Color.BLACK);
-                    g.fillRect(0, 0, WIDTH, HEIGHT);
-
-                    g.setColor(Color.WHITE);
-                    Font titleFont = new Font("SansSerif", Font.BOLD, 9);
-                    g.setFont(titleFont);
-                    FontMetrics fmTop = g.getFontMetrics();
-                    g.drawString("PONG GAME", 1, fmTop.getAscent());
-
-                    int startY = RESERVED_TOP + TEXT_TOP_PAD;
-                    int availH = HEIGHT - startY;
-                    int availW = WIDTH - TEXT_X;
-                    boolean alive = System.currentTimeMillis() < expireAtMs;
-
-                    if (alive && mode == Mode.TEXT && text != null) {
-                        g.setFont(font);
-                        g.setColor(Color.WHITE);
+                // Prioridad de estados: WINNER > GOAL > COUNTDOWN > PLAYING > WAITING
+                switch (gameState) {
+                    case WINNER -> {
+                        // Mostrar ganador durante 4s (no bloqueante)
+                        g.setColor(Color.GREEN);
+                        Font winnerFont = new Font("SansSerif", Font.BOLD, 18);
+                        g.setFont(winnerFont);
                         FontMetrics fm = g.getFontMetrics();
-                        int textWidth = fm.stringWidth(text);
+                        String display = (winnerText != null ? winnerText + " WIN!" : "GANADOR");
+                        int x = (WIDTH - fm.stringWidth(display)) / 2;
+                        int y = (HEIGHT / 2) + (fm.getAscent() / 2);
+                        g.drawString(display, x, y);
 
-                        if (textWidth > availW && scrollingText != null) {
-                            long currentTime = System.currentTimeMillis();
-                            if (currentTime - lastScrollTime > 100) {
-                                scrollX -= 1;
-                                lastScrollTime = currentTime;
-                                if (scrollX + textWidth < 0) scrollX = WIDTH;
-                            }
-                            g.drawString(scrollingText, TEXT_X + scrollX, startY + fm.getAscent());
-                        } else {
-                            List<String> lines = wrapText(text, fm, availW, availH);
-                            int y = startY + fm.getAscent();
-                            for (String line : lines) {
-                                g.drawString(line, TEXT_X, y);
-                                y += fm.getHeight();
-                            }
+                        if (winnerStartMs == 0) winnerStartMs = now;
+                        if (now - winnerStartMs >= 4000) {
+                            // fin mostrar ganador -> volver a WAITING
+                            winnerStartMs = 0;
+                            showWinnerActive = false;
+                            gameState = GameState.WAITING;
+                            jocActiu = false;
+                            // limpiamos datos para no mostrar partida anterior
+                            gameObjects.clear();
+                            j1Punts = 0;
+                            j2Punts = 0;
+                            text = "Esperando jugadores";
+                            mode = Mode.TEXT;
+                            expireAtMs = System.currentTimeMillis() + 8000;
+                        }
+                    }
+
+                    case GOAL -> {
+                        // Mostrar cuenta de gol sin bloquear, decrementar por segundo
+                        g.setColor(Color.YELLOW);
+                        Font countdownFont = new Font("SansSerif", Font.BOLD, 20);
+                        g.setFont(countdownFont);
+                        FontMetrics fm = g.getFontMetrics();
+                        int displayNum = stateCountdownValue;
+                        String display = String.valueOf(displayNum);
+                        int x = (WIDTH - fm.stringWidth(display)) / 2;
+                        int y = (HEIGHT / 2) + (fm.getAscent() / 2);
+                        g.drawString(display, x, y);
+
+                        // iniciar temporizador si no está
+                        if (stateStartMs == 0) stateStartMs = now;
+                        // si ha pasado 1s, bajar contador
+                        if (now - stateStartMs >= 1000) {
+                            stateStartMs += 1000; // avanzamos 1 segundo
+                            stateCountdownValue = Math.max(0, stateCountdownValue - 1);
+                            System.out.println("[client] GOAL countdown -> " + stateCountdownValue);
+                        }
+                        if (stateCountdownValue <= 0) {
+                            // fin de pausa por gol -> volver a PLAYING (servidor pondrá posiciones)
+                            golCountdownActive = false;
+                            stateStartMs = 0;
+                            stateCountdownValue = 0;
+                            gameState = GameState.PLAYING;
+                        }
+                    }
+
+                    case COUNTDOWN -> {
+                        // Countdown inicial antes de empezar (3..0)
+                        g.setColor(Color.WHITE);
+                        Font cdFont = new Font("SansSerif", Font.BOLD, 20);
+                        g.setFont(cdFont);
+                        FontMetrics fm = g.getFontMetrics();
+
+                        // Si el servidor nos envía el valor, usamos stateCountdownValue; si no, usamos text
+                        int displayNum = stateCountdownValue;
+                        String display = (displayNum > 0) ? String.valueOf(displayNum) : (text != null ? text : "");
+                        int x = (WIDTH - fm.stringWidth(display)) / 2;
+                        int y = (HEIGHT / 2) + (fm.getAscent() / 2);
+                        g.drawString(display, x, y);
+
+                        // si tenemos un contador por tiempo, decrementar cada 1s
+                        if (stateStartMs == 0) stateStartMs = now;
+                        if (stateCountdownValue > 0 && (now - stateStartMs >= 1000)) {
+                            stateStartMs += 1000;
+                            stateCountdownValue = Math.max(0, stateCountdownValue - 1);
+                            text = String.valueOf(stateCountdownValue);
+                        }
+                        if (stateCountdownValue <= 0) {
+                            countdownActive = false;
+                            stateStartMs = 0;
+                            stateCountdownValue = 0;
+                            // saltamos a PLAYING; serverData seguirá llegando
+                            gameState = GameState.PLAYING;
+                            mode = Mode.NONE;
                         }
 
-                    } else if (alive && mode == Mode.IMAGE && image != null) {
-                        UtilsImage.drawImageFit(g, image, 0, 0, WIDTH, HEIGHT, FitMode.CONTAIN);
-                    } else {
-                        mode = Mode.NONE;
-                        text = null;
-                        image = null;
-                        scrollingText = null;
-                        scrollX = 0;
+                        // dibujar título arriba
+                        g.setFont(new Font("SansSerif", Font.BOLD, 9));
+                        FontMetrics fmTop = g.getFontMetrics();
+                        g.drawString("PONG GAME", 1, fmTop.getAscent());
                     }
+
+                    case PLAYING -> {
+                        // Render del juego
+                        jocActiu = true;
+                        // fondo del juego
+                        g.setColor(Color.BLUE);
+                        g.fillRect(0, RESERVED_TOP, WIDTH, HEIGHT - RESERVED_TOP);
+                        g.setColor(Color.BLACK);
+                        g.fillRect(0, 0, WIDTH, RESERVED_TOP);
+
+                        // puntuaciones
+                        g.setColor(Color.WHITE);
+                        Font scoreFont = new Font("SansSerif", Font.BOLD, 10);
+                        g.setFont(scoreFont);
+                        FontMetrics fmTop = g.getFontMetrics();
+                        g.drawString(String.valueOf(j1Punts), 2, fmTop.getAscent());
+                        g.drawString(String.valueOf(j2Punts),
+                                WIDTH - fmTop.stringWidth(String.valueOf(j2Punts)) - 2,
+                                fmTop.getAscent());
+
+                        // dibujar objetos
+                        for (GameObject go : new ArrayList<>(gameObjects)) {
+                            Color col = switch (go.color.toUpperCase()) {
+                                case "RED" -> Color.RED;
+                                case "BLACK" -> Color.BLACK;
+                                case "WHITE" -> Color.WHITE;
+                                default -> Color.GRAY;
+                            };
+                            g.setColor(col);
+                            g.fillRect(go.x, go.y, go.ancho, go.alto);
+                        }
+                    }
+
+                    case WAITING -> {
+                        // Pantalla de espera (puede ser reemplazada por Mode.TEXT si hay mensajes)
+                        jocActiu = false;
+                        g.setColor(Color.BLACK);
+                        g.fillRect(0, 0, WIDTH, HEIGHT);
+
+                        // si hay texto temporal válido (mode == TEXT y no caducado), dibujarlo
+                        boolean alive = System.currentTimeMillis() < expireAtMs;
+                        if (alive && mode == Mode.TEXT && text != null) {
+                            g.setColor(Color.WHITE);
+                            g.setFont(font);
+                            FontMetrics fm = g.getFontMetrics();
+                            int availW = WIDTH - TEXT_X;
+                            int availH = HEIGHT - (RESERVED_TOP + TEXT_TOP_PAD);
+                            if (scrollingText != null && fm.stringWidth(text) > availW) {
+                                long currentTime = System.currentTimeMillis();
+                                if (currentTime - lastScrollTime > 100) {
+                                    scrollX -= 1;
+                                    lastScrollTime = currentTime;
+                                    if (scrollX + fm.stringWidth(scrollingText) < 0) scrollX = WIDTH;
+                                }
+                                g.drawString(scrollingText, TEXT_X + scrollX, RESERVED_TOP + TEXT_TOP_PAD + fm.getAscent());
+                            } else {
+                                List<String> lines = wrapText(text, g.getFontMetrics(), availW, availH);
+                                int y = RESERVED_TOP + TEXT_TOP_PAD + g.getFontMetrics().getAscent();
+                                for (String line : lines) {
+                                    g.drawString(line, TEXT_X, y);
+                                    y += g.getFontMetrics().getHeight();
+                                }
+                            }
+                        } else {
+                            // Mensaje por defecto waiting
+                            g.setColor(Color.WHITE);
+                            Font waitFont = new Font("SansSerif", Font.PLAIN, 10);
+                            g.setFont(waitFont);
+                            FontMetrics fm = g.getFontMetrics();
+                            String message = "Esperando jugadores...";
+                            int x = (WIDTH - fm.stringWidth(message)) / 2;
+                            int y = (HEIGHT / 2) + (fm.getAscent() / 2);
+                            g.drawString(message, x, y);
+                        }
+                    }
+                } // end switch gameState
+
+                // Si estamos en Mode.IMAGE y no estamos en un estado que deba ocultarlo,
+                // dibujamos la imagen (por ejemplo: banners que llegan)
+                if (mode == Mode.IMAGE && image != null) {
+                    UtilsImage.drawImageFit(g, image, 0, 0, WIDTH, HEIGHT, FitMode.CONTAIN);
                 }
 
+                // Copiar framebuffer y swap
                 PioMatter.copyBufferedImageToRGB888(back, fb.data, fb.strideBytes, WIDTH, HEIGHT, BRIGHTNESS);
                 pm.swap();
+
                 fps.endFrameAndCap(FPS_CAP);
             }
 
@@ -506,6 +565,7 @@ public class Main {
         }
     }
 
+    // helpers de texto
     private static List<String> wrapText(String s, FontMetrics fm, int maxW, int maxH) {
         ArrayList<String> out = new ArrayList<>();
         if (s == null || s.isEmpty() || maxW <= 0 || maxH <= 0) return out;
